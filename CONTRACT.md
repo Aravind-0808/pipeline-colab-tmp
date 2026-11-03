@@ -130,9 +130,8 @@ optional; null, or anything the pipeline cannot read, means a guessed lens, as
 before. No protocol change: an older pipeline ignores it.
 
 **`metrics.perception`** says how the clip's distances were made: `hand_model`
-(`mediapipe` | `wilor`), `lens_source` (`phone-calibration` | `phone` |
-`depth-model` | `guess`), `hfov_deg`, `up_known`, `depth_model` (`off` or the
-model), and with a depth model the table's and the hand's measurement
+(`wilor`), `lens_source` (`phone-calibration` | `phone` | `depth-model`),
+`hfov_deg`, `up_known`, `depth_model` (the model), and with a depth model the table's and the hand's measurement
 (`table_source`, `hand_scale`, `hand_scale_spread`, ...). Absent from tracks
 made before it.
 

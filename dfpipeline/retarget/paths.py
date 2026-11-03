@@ -1,7 +1,7 @@
 """Where the retargeting pipeline's model files live.
 
 Vendored from Hand2Robot, which ran from its own repository root and could
-write `Path("models/hand_landmarker.task")` and be right. Here the working
+write `Path("models/efficientdet_lite0.tflite")` and be right. Here the working
 directory is the backend, the worker may be started from anywhere, and the
 calibration file is not one file at all — it belongs to whichever robot the
 export chose.
@@ -23,10 +23,6 @@ _calibration: ContextVar[Path | None] = ContextVar("retarget_calibration", defau
 
 def models_dir() -> Path:
     return Path(settings.retarget_models_dir).resolve()
-
-
-def hand_landmarker() -> Path:
-    return models_dir() / "hand_landmarker.task"
 
 
 def object_detector() -> Path:
@@ -60,4 +56,4 @@ def use_calibration(path: Path | str | None):
 
 def missing() -> list[str]:
     """The fixed assets that are not on disk. Checked before a job starts."""
-    return [str(p) for p in (hand_landmarker(), object_detector(), urdf()) if not p.exists()]
+    return [str(p) for p in (object_detector(), urdf()) if not p.exists()]

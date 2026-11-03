@@ -1,24 +1,23 @@
-"""WiLoR: a 3D hand model in place of MediaPipe's landmarks (a GPU model).
+"""WiLoR: the hand detector, a 3D hand model on the GPU.
 
-MediaPipe's hand is light and fast, and loose: about 48 mm average joint error
-where WiLoR has about 15 in one study (WristPP, arXiv 2603.00606), and it
-loses fingers it cannot see. WiLoR (CVPR 2025) fits a full MANO hand per
-frame, with its own hand detector, and holds up better when part of the hand
-is hidden — which, holding things, it always is.
+WiLoR (CVPR 2025) fits a full MANO hand per frame, with its own hand
+detector: about 15 mm average joint error, and it holds up when part of the
+hand is hidden — which, holding things, it always is. On the Colab A/B/C
+test it replaced MediaPipe: 5x less jitter, and a hand path that stays
+within reach of the table instead of jumping a metre in depth.
 
-It is a drop-in for `HandDetector`: the same `detect_video`, the same
-`HandDetection`s, so tracking, reconstruction, fusion and the robot stage
-are unchanged. Its 3D joints (metres, MANO, in the order MediaPipe uses —
-wrist, then thumb, index, middle, ring, little, base to tip) take the place of
-MediaPipe's world landmarks: `HandReconstructor` fits them to the 2D joints
-with the clip's real lens (lens.py), exactly as before.
+It gives `HandDetection`s, so tracking, reconstruction, fusion and the robot
+stage are unchanged. Its 3D joints (metres, MANO: wrist, then thumb, index,
+middle, ring, little, base to tip) are fitted to its 2D joints with the
+clip's real lens (lens.py) by `HandReconstructor`.
 
 Through WiLoR-mini (`wilor_mini`), the packaged inference of it. Licences:
 WiLoR's weights are CC BY-NC-ND 4.0 and MANO's are non-commercial; the
 detector is Ultralytics YOLO. Research only (docs/HAND2ROBOT_2.md).
 
-Every frame is read, as MediaPipe's were; the model is loaded once per worker
-process and kept, on the GPU within its share of memory (gpu.torch_device).
+Every frame is read; the model is loaded once per worker process and kept,
+on the GPU within its share of memory (gpu.torch_device). There is no CPU
+path: without a GPU the clip fails.
 """
 
 from __future__ import annotations
@@ -33,8 +32,7 @@ from dfpipeline.retarget.hand_detection import HandDetection
 
 log = logging.getLogger("hand2robot.hand_wilor")
 
-#: The detector's bar for a hand; WiLoR-mini's default. Low, as MediaPipe's
-#: was: false hands are dropped by the trackers and the PnP fit.
+#: The detector's bar for a hand; WiLoR-mini's default. Low: false hands are dropped by the trackers and the PnP fit.
 MIN_CONFIDENCE = 0.3
 
 
@@ -47,8 +45,8 @@ def _pipeline():
 
     from dfpipeline import gpu
 
-    device = gpu.torch_device()
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    device = gpu.torch_device()     # "cuda", or it raises
+    dtype = torch.float16
     log.info("WiLoR on %s (%s)", device, dtype)
     # Baked into the image (scripts/download_perception_weights.py); else
     # WiLoR-mini fetches them into this folder on first use.
@@ -88,7 +86,7 @@ def kp2_box(kp2: np.ndarray) -> list[float]:
 
 
 class WilorDetector:
-    """Hands in every frame of a video, by WiLoR. Same interface as HandDetector."""
+    """Hands in every frame of a video, by WiLoR."""
 
     name = "wilor"
 
@@ -128,11 +126,6 @@ class WilorDetector:
         return out
 
 
-def make_detector():
-    """The hand detector RETARGET_HAND_MODEL names: MediaPipe (the default) or WiLoR."""
-    from dfpipeline.config import settings
-    from dfpipeline.retarget.hand_detection import HandDetector
-
-    if (settings.retarget_hand_model or "mediapipe").strip().lower() == "wilor":
-        return WilorDetector()
-    return HandDetector()
+def make_detector() -> WilorDetector:
+    """The hand detector: WiLoR, the only one."""
+    return WilorDetector()

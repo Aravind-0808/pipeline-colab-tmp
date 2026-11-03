@@ -39,7 +39,7 @@ phone video + camera facts (the app, silently)            ── Mobile CameraFa
   ├─ 1. Lens        from the phone's Camera2 data; else the depth
   │                 model's estimate; else the old guess          lens.py          [CPU]
   ├─ 2. Up          the phone's gravity sensor, in picture axes   lens.py          [CPU]
-  ├─ 3. Hand        MediaPipe (default) or WiLoR                  hand_wilor.py    [GPU for WiLoR]
+  ├─ 3. Hand        WiLoR (the only detector, after the A/B/C test) hand_wilor.py    [GPU]
   ├─ 4. 3D hand     PnP with the real lens (unchanged code)       hand_reconstruction.py
   ├─ 5. Depth       MoGe-2 on ~12 frames: table plane (RANSAC,
   │                 facing up) and the hand's real scale          scene.py         [GPU]

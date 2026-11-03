@@ -226,19 +226,21 @@ def run_hand_stage(
         cap.release()
         return 1
 
-    # The lens: from the phone where it said, else the old guess (lens.py).
+    # The lens: from the phone where it said, else the depth model's estimate
+    # (lens.py, scene.py). Never guessed: a guessed lens put the hand 0.9 m
+    # away where it was 0.65, and every distance after it was wrong.
     lens = lenses.resolve(camera, width, height)
     if lens.source == "guess":
-        # No word from the phone: the depth model's estimate, where there is one.
         from dfpipeline.retarget import scene
 
-        try:
-            estimated = scene.estimate_hfov(input_path, total_frames)
-        except Exception as exc:  # noqa: BLE001 - the guess stands
-            log.warning("field of view not estimated: %s", exc)
-            estimated = None
-        if estimated:
-            lens = lenses.from_hfov(estimated, width, height, "depth-model") or lens
+        estimated = scene.estimate_hfov(input_path, total_frames)
+        measured = lenses.from_hfov(estimated, width, height, "depth-model") if estimated else None
+        if measured is None:
+            log.error("The lens could not be measured: the phone sent no camera data and "
+                      "the depth model gave no field of view.")
+            cap.release()
+            return 1
+        lens = measured
     K = lens.K
     up = lenses.up_in_image(camera)
     log.info("Lens: %s, %.0f° across%s; up %s", lens.source, lens.hfov_deg,
@@ -255,8 +257,8 @@ def run_hand_stage(
                               progress_callback, True, start_time, up)
 
     log.info("=" * 65)
-    log.info("HAND2ROBOT: video -> 3D hand & object -> SO-101 (lightweight, CPU)")
-    log.info("Pipeline: MediaPipe -> Geometric 3D Hand -> Visual Odometry -> World Fusion")
+    log.info("HAND2ROBOT: video -> 3D hand & object -> SO-101")
+    log.info("Pipeline: WiLoR + depth model (GPU) -> 3D Hand -> Visual Odometry -> World Fusion")
     log.info("=" * 65)
 
     # 2. Initialize Pipeline Modules
@@ -267,7 +269,7 @@ def run_hand_stage(
     exporter = TrajectoryExporter(output_dir=out_dir)
 
     # 3. Stage 1 & 2: Process frames for Hand Detection & 3D Reconstruction
-    log.info("Stage 1 & 2: Running MediaPipe Hand Detection & 3D Reconstruction...")
+    log.info("Stage 1 & 2: Running WiLoR Hand Detection & 3D Reconstruction...")
     reconstructions: list = []
     hand_bboxes: dict[int, list[list[float]]] = {}
     pinch_px: dict[int, np.ndarray] = {}
@@ -492,7 +494,8 @@ def _write_holds(folder, keypoints, candidates, frames, total_frames, fps, K, ho
 def _measure_scene(video: Path, lens, up, total_frames: int, seen: dict[int, list],
                    boxes: dict[int, list]):
     """The depth model's measurements (scene.py), with the hand's scale
-    already applied to every reconstruction; None without a depth model.
+    already applied to every reconstruction. A depth model that fails fails
+    the clip: there is no measuring without it.
 
     The scale multiplies each joint's camera coordinates: the hand slides
     along its own lines of sight and stays exactly on its pixels.
@@ -500,13 +503,8 @@ def _measure_scene(video: Path, lens, up, total_frames: int, seen: dict[int, lis
     from dfpipeline.retarget import scene
 
     hands = {i: [(kp, r.joints_camera) for kp, r in pairs] for i, pairs in seen.items()}
-    try:
-        found = scene.measure(video, lens.K, lens.hfov_deg,
-                              total_frames, hands, boxes, up)
-    except Exception as exc:  # noqa: BLE001 - the depth model is an improvement, never a failure
-        log.warning("depth measurement skipped: %s", exc)
-        return None
-    if found is not None and found.hand_scale is not None:
+    found = scene.measure(video, lens.K, lens.hfov_deg, total_frames, hands, boxes, up)
+    if found.hand_scale is not None:
         scaled = {id(r): r for pairs in seen.values() for _, r in pairs}
         for r in scaled.values():
             r.joints_camera = (r.joints_camera * found.hand_scale).astype(np.float32)
@@ -525,16 +523,15 @@ def _plane_distance(found, reconstructions) -> float | None:
 
 def _perception(lens, up, found) -> dict:
     """How this clip's distances were made, for the bundle and the review
-    screens: from the phone or guessed, measured or estimated."""
-    from dfpipeline.config import settings
-
+    screens: the lens from the phone or the depth model, the table and the
+    hand's scale measured or not."""
     return {
-        "hand_model": (settings.retarget_hand_model or "mediapipe").strip().lower(),
+        "hand_model": "wilor",
         "lens_source": lens.source,
         "hfov_deg": round(lens.hfov_deg, 1),
         "stabilized": lens.stabilized,
         "up_known": up is not None,
-        **(found.summary() if found is not None else {"depth_model": "off"}),
+        **found.summary(),
     }
 
 

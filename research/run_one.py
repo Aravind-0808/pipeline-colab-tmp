@@ -1,14 +1,14 @@
-"""One clip through one config, in a process of its own (research only).
+"""One clip through the pipeline (WiLoR + the depth model, on the GPU), in a
+process of its own (research only).
 
-The notebook runs every (clip, config) through this, each in a fresh process:
-MediaPipe, the depth model and WiLoR in one long-lived notebook process ran a
-Colab T4 out of memory and the kernel died mid-run. A process per run starts
-clean, loads only its own models, and gives everything back when it ends; a
-failure is one row, not the notebook.
+The notebook runs every clip through this, each in a fresh process: the
+models in one long-lived notebook process ran a Colab T4 out of memory and
+the kernel died mid-run. A process per clip starts clean and gives
+everything back when it ends; a failure is one row, not the notebook.
 
-    python research/run_one.py CLIP CONFIG HANDS OUT_ROOT [TRUTH_CM]
+    python research/run_one.py CLIP HANDS OUT_ROOT [TRUTH_CM]
 
-Writes OUT_ROOT/CONFIG/<clip stem>/row.json (and the run's hand/ and robot/).
+Writes OUT_ROOT/<clip stem>/row.json (and the run's hand/ and robot/).
 """
 
 from __future__ import annotations
@@ -21,30 +21,20 @@ import time
 import traceback
 from pathlib import Path
 
-CONFIGS = {
-    "A_today": {"retarget_hand_model": "mediapipe", "retarget_depth_model": "off"},
-    "B_depth": {"retarget_hand_model": "mediapipe", "retarget_depth_model": "moge-2-vitb"},
-    "C_wilor_depth": {"retarget_hand_model": "wilor", "retarget_depth_model": "moge-2-vitb"},
-}
-
 
 def main() -> int:
-    clip, name, hands, out_root = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3]), Path(sys.argv[4])
-    truth = float(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else None
+    clip, hands, out_root = Path(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3])
+    truth = float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
     logging.basicConfig(level=logging.WARNING)
 
-    from dfpipeline.config import settings
-
-    for k, v in CONFIGS[name].items():
-        setattr(settings, k, v)
     from dfpipeline.retarget import service as rs
     from dfpipeline.retarget.pipeline import run_hand_stage, run_robot_stage
 
-    out = out_root / name / clip.stem
+    out = out_root / clip.stem
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    row = {"clip": clip.name, "config": name}
+    row = {"clip": clip.name}
     try:
         cam_file = Path(str(clip) + ".camera.json")
         camera = json.loads(cam_file.read_text()) if cam_file.exists() else None
@@ -70,7 +60,7 @@ def main() -> int:
     except Exception:  # noqa: BLE001 - reported in the row
         row["error"] = traceback.format_exc()[-800:]
     (out / "row.json").write_text(json.dumps(row, indent=1, default=str))
-    print(json.dumps({k: row.get(k) for k in ("clip", "config", "hand_s", "p_lens_source", "error")}))
+    print(json.dumps({k: row.get(k) for k in ("clip", "hand_s", "p_lens_source", "error")}))
     return 0
 
 

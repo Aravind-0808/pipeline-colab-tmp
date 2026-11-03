@@ -143,12 +143,13 @@ def test_a_clip_is_measured_on_a_few_frames(tmp_path, monkeypatch):
     assert found.summary()["table_source"] == "depth"
 
 
-def test_without_a_depth_model_nothing_is_measured(monkeypatch):
+def test_there_is_no_turning_the_depth_model_off(monkeypatch):
+    """The guessed distances it replaced were wrong: "off" is an error, not a fallback."""
     monkeypatch.setattr(settings, "retarget_depth_model", "off")
     scene.depth_model.cache_clear()
     try:
-        assert scene.depth_model() is None
-        assert scene.measure(None, K, None, 10, {}, {}, None) is None
+        with pytest.raises(ValueError, match="unknown depth model"):
+            scene.depth_model()
     finally:
         scene.depth_model.cache_clear()
 

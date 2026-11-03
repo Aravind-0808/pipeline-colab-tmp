@@ -38,23 +38,16 @@ log = logging.getLogger("pipeline.scheduler")
 TICK_SEC = 30
 
 
-def perception_models() -> bool:
-    """Hand tracking uses PyTorch models (docs/HAND2ROBOT_2.md)."""
-    return (settings.retarget_hand_model or "mediapipe").strip().lower() != "mediapipe" or \
-        (settings.retarget_depth_model or "off").strip().lower() not in ("", "off", "none")
-
-
 def groups() -> list[tuple[str, int]]:
     """(queue, tasks at once) for each worker this machine runs.
 
-    With hand-tracking models, `track` runs one clip at a time: each worker
-    process loads its own copy of every model, so two at once is twice the
-    GPU memory, and the GPU is the AI model's first.
+    `track` runs one clip at a time: hand tracking is GPU models (WiLoR and
+    the depth model), each worker process loads its own copy of every one,
+    so two at once is twice the GPU memory, and the GPU is the AI model's first.
     """
-    track = 1 if perception_models() else max(1, settings.track_concurrency)
     return [
         ("check", max(1, settings.check_concurrency)),
-        ("track", track),
+        ("track", 1),
         ("build", max(1, settings.build_concurrency)),
     ]
 
@@ -66,7 +59,7 @@ def command(queue: str, concurrency: int) -> list[str]:
         "-Q", queue, "-c", str(concurrency), "-n", f"{node}-{queue}@%h",
         "--loglevel=INFO",
     ]
-    if queue == "track" and perception_models():
+    if queue == "track":
         # A process holding the models is past the usual memory bar from its
         # first clip, and would be replaced — and reload them — after every
         # one. Its own, higher bar; the models are what it is for.

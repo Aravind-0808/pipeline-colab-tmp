@@ -224,7 +224,10 @@ def test_a_two_hand_clip_is_filmed_from_a_stand(tmp_path, monkeypatch):
         seen["static_camera"] = args[7]
         return 0
 
+    from dfpipeline.retarget import scene
+
     monkeypatch.setattr(pipeline, "_run_two_hands", two_hands)
     monkeypatch.setattr(pipeline, "probe_stream", lambda path: (10, 1 / 3))
+    monkeypatch.setattr(scene, "estimate_hfov", lambda *a, **k: 70.0)   # the depth model's lens
     assert pipeline.run_hand_stage(clip, tmp_path / "out", hands=2, static_camera=False) == 0
     assert seen["static_camera"] is True

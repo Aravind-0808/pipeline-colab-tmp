@@ -7,7 +7,6 @@ For one clip run through the pipeline (research/hand2robot2_colab.ipynb):
   robot_sim.mp4      the SO-101 in MuJoCo replaying the trajectory, on the
                      robot's own clock; the hand's target as a red dot
   two_view.mp4       both, side by side, on the video's clock
-  compare.mp4        (compare()) one config's two-view above another's
 
 Not part of the pipeline, never deployed: the platform keeps no drawn video
 (dfpipeline/retarget/__init__.py). MuJoCo needs the SO-101 model with its
@@ -218,7 +217,7 @@ def render(video: Path, run_dir: Path, title: str, so101_dir: Path | None = None
 
     lines = [
         title,
-        f"lens: {p.get('lens_source', 'guess')} {p.get('hfov_deg', '?')} deg | hand: {p.get('hand_model', 'mediapipe')}",
+        f"lens: {p.get('lens_source', 'guess')} {p.get('hfov_deg', '?')} deg | hand: {p.get('hand_model', 'wilor')}",
         f"table: {bundle.get('table_distance_m') or 0:.2f} m ({p.get('table_source') or 'from hand'})"
         f" | hand scale: {p.get('hand_scale') or '-'} (measured {p.get('hand_scale_measured') or '-'})",
     ]
@@ -279,34 +278,3 @@ def render(video: Path, run_dir: Path, title: str, so101_dir: Path | None = None
     if sim:
         sim.close()
     return written
-
-
-def compare(top: Path, bottom: Path, dest: Path, height: int = 360) -> Path | None:
-    """Two two-view videos stacked: one config above another, frame by frame.
-    None when either could not be read (nothing is written)."""
-    import cv2
-
-    a, b = cv2.VideoCapture(str(top)), cv2.VideoCapture(str(bottom))
-    if not (a.isOpened() and b.isOpened()):
-        return None
-    fps = a.get(cv2.CAP_PROP_FPS) or 30.0
-    writer = None
-    while True:
-        ok1, x = a.read()
-        ok2, y = b.read()
-        if not (ok1 and ok2):
-            break
-        x, y = _fit(x, height), _fit(y, height)
-        width = max(x.shape[1], y.shape[1])
-        x = cv2.copyMakeBorder(x, 0, 0, 0, width - x.shape[1], cv2.BORDER_CONSTANT)
-        y = cv2.copyMakeBorder(y, 0, 0, 0, width - y.shape[1], cv2.BORDER_CONSTANT)
-        frame = np.vstack([x, y])
-        if writer is None:
-            writer = _Writer(dest, fps, frame.shape[1], frame.shape[0])
-        writer.write(frame)
-    a.release()
-    b.release()
-    if writer is None:
-        return None
-    writer.close()
-    return dest

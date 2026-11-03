@@ -1,6 +1,7 @@
-"""The hand-tracking models wired in: which detector, one clip at a time on the
-GPU, the depth model's scale reaching the hand, and the bundle saying how its
-distances were made (docs/HAND2ROBOT_2.md). No model is loaded."""
+"""The hand-tracking models wired in: WiLoR the only detector, one clip at a
+time on the GPU, the depth model's scale reaching the hand (and its failure
+failing the clip), and the bundle saying how its distances were made
+(docs/HAND2ROBOT_2.md). No model is loaded."""
 
 import numpy as np
 import pytest
@@ -37,28 +38,17 @@ def test_an_incomplete_wilor_hand_is_dropped():
     assert hand_wilor.to_detection({}, 1280, 720) is None
 
 
-def test_mediapipe_stays_the_default_detector(monkeypatch):
-    monkeypatch.setattr(settings, "retarget_hand_model", "mediapipe")
-    from dfpipeline.retarget.hand_detection import HandDetector
-
-    monkeypatch.setattr(HandDetector, "__init__", lambda self: None)
-    assert isinstance(hand_wilor.make_detector(), HandDetector)
+def test_wilor_is_the_only_detector(monkeypatch):
+    monkeypatch.setattr(hand_wilor.WilorDetector, "__init__", lambda self: None)
+    assert isinstance(hand_wilor.make_detector(), hand_wilor.WilorDetector)
 
 
-@pytest.mark.parametrize("hand,depth,track", [
-    ("mediapipe", "off", 2),
-    ("wilor", "off", 1),
-    ("mediapipe", "moge-2-vitb", 1),
-])
-def test_with_models_hand_tracking_takes_one_clip_at_a_time(monkeypatch, hand, depth, track):
+def test_hand_tracking_takes_one_clip_at_a_time(monkeypatch):
     """Each worker process loads its own copy of every model: two at once is
     twice the GPU memory, and the GPU is the AI model's first."""
-    monkeypatch.setattr(settings, "retarget_hand_model", hand)
-    monkeypatch.setattr(settings, "retarget_depth_model", depth)
     monkeypatch.setattr(settings, "track_concurrency", 2)
-    assert dict(scheduler.groups())["track"] == track
-    cmd = scheduler.command("track", track)
-    assert any(c.startswith("--max-memory-per-child") for c in cmd) == (track == 1)
+    assert dict(scheduler.groups())["track"] == 1
+    assert any(c.startswith("--max-memory-per-child") for c in scheduler.command("track", 1))
 
 
 class _Recon:
@@ -79,24 +69,25 @@ def test_the_measured_scale_moves_every_reconstruction(monkeypatch):
     assert pipeline._plane_distance(found, recons) == pytest.approx(0.7)
 
 
-def test_a_failing_depth_model_leaves_the_hand_as_it_was(monkeypatch):
-    recon = _Recon(0.4)
-
+def test_a_failing_depth_model_fails_the_clip(monkeypatch):
+    """No measuring without it: the guessed distances it replaced were wrong."""
     def broken(*a, **k):
         raise RuntimeError("CUDA out of memory")
 
     monkeypatch.setattr(scene, "measure", broken)
-    assert pipeline._measure_scene(None, lens.guess(640, 480), None, 10, {0: [(None, recon)]}, {}) is None
-    assert recon.joints_camera[0, 2] == pytest.approx(0.4)
-    # And the table is estimated from the hand, as before.
-    assert pipeline._plane_distance(None, [recon]) == pytest.approx(0.4)
+    with pytest.raises(RuntimeError):
+        pipeline._measure_scene(None, lens.guess(640, 480), None, 10, {0: [(None, _Recon(0.4))]}, {})
+
+
+def test_without_a_table_the_hand_gives_its_distance():
+    recon = _Recon(0.4)
+    assert pipeline._plane_distance(scene.Scene(model="moge-2-vitb"), [recon]) == pytest.approx(0.4)
 
 
 def test_the_bundle_says_how_its_distances_were_made():
-    without = pipeline._perception(lens.guess(1280, 720), None, None)
-    assert without["lens_source"] == "guess" and without["depth_model"] == "off"
     found = scene.Scene(model="moge-2-vitb", frames_used=12, hand_scale=1.1)
     phone = lens.from_hfov(70.0, 1280, 720, "phone")
     got = pipeline._perception(phone, np.array([0.0, -1.0, 0.0]), found)
     assert got["lens_source"] == "phone" and got["up_known"] is True
     assert got["depth_model"] == "moge-2-vitb" and got["hand_scale"] == 1.1
+    assert got["hand_model"] == "wilor"

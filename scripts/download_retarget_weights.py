@@ -21,10 +21,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(m
 log = logging.getLogger("retarget.weights")
 
 MODELS = {
-    "hand_landmarker.task": (
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-        "hand_landmarker/float16/latest/hand_landmarker.task"
-    ),
     "efficientdet_lite0.tflite": (
         "https://storage.googleapis.com/mediapipe-models/object_detector/"
         "efficientdet_lite0/float16/latest/efficientdet_lite0.tflite"

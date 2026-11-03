@@ -27,10 +27,10 @@ FROM python:3.12-slim AS pipeline
 # libegl1 and libgles2 are not that chain. MediaPipe's native library links
 # against libEGL.so.1 and libGLESv2.so.2 and will not load without them, even
 # on the CPU delegate that never opens a GL context. `import mediapipe` does not
-# load it — the first HandLandmarker does — so without these every track.clip
+# load it — the first detector does — so without these every track.clip
 # job fails with "libEGL.so.1: cannot open shared object file". This does bring
 # Mesa and LLVM back: Debian's libegl1 hard-depends on libegl-mesa0, which no
-# --no-install-recommends can drop. That is the price of hand tracking running.
+# --no-install-recommends can drop. That is the price of object tracking running.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl libglib2.0-0 libegl1 libgles2 \
     && rm -rf /var/lib/apt/lists/*
@@ -120,13 +120,13 @@ RUN if [ -n "$PERCEPTION" ]; then \
     fi
 
 # The import check above cannot catch a missing system library: MediaPipe only
-# loads its native code when a task is created. Creating the hand landmarker
+# loads its native code when a task is created. Creating the object detector
 # here is what does, so a missing libEGL fails the build instead of every
 # tracking job in production.
 RUN python -c "from mediapipe.tasks import python as mp; from mediapipe.tasks.python import vision; \
-vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions( \
-base_options=mp.BaseOptions(model_asset_path='/app/models/hand_landmarker.task'), \
-running_mode=vision.RunningMode.VIDEO)).close(); print('HandLandmarker loads OK')"
+vision.ObjectDetector.create_from_options(vision.ObjectDetectorOptions( \
+base_options=mp.BaseOptions(model_asset_path='/app/models/efficientdet_lite0.tflite'))).close(); \
+print('ObjectDetector loads OK')"
 
 # Then the real source, and the project itself without touching its
 # dependencies — they are in the layers above.

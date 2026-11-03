@@ -213,16 +213,14 @@ def sample_frames(total: int, count: int) -> list[int]:
 def measure(video: Path, K: np.ndarray, hfov_deg: float | None, total_frames: int,
             hands: dict[int, list[tuple[np.ndarray, np.ndarray]]],
             boxes: dict[int, list[list[float]]], up: np.ndarray | None,
-            model: DepthModel | None = None) -> Scene | None:
+            model: DepthModel | None = None) -> Scene:
     """Measure the table and the hand's scale for one clip.
 
     `hands`: frame -> [(2D keypoints (21, 2), reconstructed joints in camera
     axes (21, 3))] for every tracked hand in that frame; `boxes`: frame -> the
-    hands' boxes, kept out of the table. None when no depth model is set.
+    hands' boxes, kept out of the table.
     """
     model = model or depth_model()
-    if model is None:
-        return None
     import cv2
 
     started = time.perf_counter()
@@ -274,10 +272,8 @@ def measure(video: Path, K: np.ndarray, hfov_deg: float | None, total_frames: in
 def estimate_hfov(video: Path, total_frames: int, frames: int = 3,
                   model: DepthModel | None = None) -> float | None:
     """The lens's horizontal field of view, by the depth model, when the phone
-    did not say: the median over a few frames. None without a model."""
+    did not say: the median over a few frames. None when no frame gave one."""
     model = model or depth_model()
-    if model is None:
-        return None
     import cv2
 
     found = []
@@ -303,21 +299,13 @@ def estimate_hfov(video: Path, total_frames: int, frames: int = 3,
 # ------------------------------------------------------------- the models
 
 @functools.cache
-def depth_model() -> DepthModel | None:
-    """The configured depth model, loaded once per process; None when off or
-    when it cannot load (the clip is then measured the old way, and the
-    log says why)."""
-    name = (settings.retarget_depth_model or "off").strip().lower()
-    if name in ("", "off", "none"):
-        return None
-    try:
-        if name.startswith("moge"):
-            return MoGe(name)
-    except Exception as exc:  # noqa: BLE001 - no model is a fallback, not a failed clip
-        log.warning("depth model %s could not load (%s); measuring without it", name, exc)
-        return None
-    log.warning("unknown depth model %r; measuring without it", name)
-    return None
+def depth_model() -> DepthModel:
+    """The configured depth model, loaded once per process, on the GPU.
+    There is no measuring without it: a model that cannot load fails the clip."""
+    name = (settings.retarget_depth_model or "").strip().lower()
+    if not name.startswith("moge"):
+        raise ValueError(f"unknown depth model {name!r} (RETARGET_DEPTH_MODEL: moge-2-vits|vitb|vitl)")
+    return MoGe(name)
 
 
 class MoGe:

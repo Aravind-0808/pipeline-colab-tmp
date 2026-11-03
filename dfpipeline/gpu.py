@@ -1,29 +1,23 @@
-"""The GPU, where the pipeline server has an NVIDIA one that works — else the CPU.
+"""The GPU: where hand tracking runs — there is no CPU path for it.
 
-Three things here use it: MediaPipe's hand landmarker (its GPU delegate), the
-heaviest step of tracking — every frame, twice — the dataset's video
-encoding (NVENC, H.264, the codec two-arm SO-101 datasets such as
-Qiu-Xinchuan/so101_towel are in), and the PyTorch models of hand tracking
-(the depth model, scene.py; WiLoR, hand_wilor.py), within a fixed share of
-the GPU's memory (`torch_device`). Nothing else gains:
+Two things here use it:
 
-- the object detector stays on the CPU: MediaPipe's GPU path aborts the whole
-  process on its class filter ("Only ignore class 0 is allowed"), uncatchably;
-- the arm is solved by small least-squares problems, one a frame, that a GPU
-  would only slow down.
+- the PyTorch models of hand tracking (the depth model, scene.py; WiLoR,
+  hand_wilor.py), within a fixed share of the GPU's memory (`torch_device`).
+  They need it: without a CUDA device `torch_device` raises and the clip
+  fails, rather than running for hours on the CPU;
+- the dataset's video encoding (NVENC, H.264, the codec two-arm SO-101
+  datasets such as Qiu-Xinchuan/so101_towel are in), where it works.
 
-A GPU is not taken on trust, three ways:
+The arm is solved by small least-squares problems, one a frame, that a GPU
+would only slow down; the object detector is MediaPipe's, on the CPU.
 
-- MediaPipe's "GPU" runs on any OpenGL, including Mesa's software one, which is
-  slower than its CPU path. So `auto` uses it only where an NVIDIA driver is.
-- MediaPipe can fail on the GPU with a native abort that takes the process with
-  it. So it is first tried in a child process, once per worker.
-- FFmpeg lists NVENC whether or not a GPU is there (LeRobot's own
-  `vcodec="auto"` picks it on a laptop with none, and the build fails). So one
-  small frame is really encoded first.
+NVENC is not taken on trust: FFmpeg lists it whether or not a GPU is there
+(LeRobot's own `vcodec="auto"` picks it on a laptop with none, and the build
+fails), so one small frame is really encoded first.
 
-`PIPELINE_GPU`: `auto` (the default), `off` (never), `on` (try even without an
-NVIDIA driver, and warn when falling back).
+`PIPELINE_GPU` (video encoding only): `off` (the default: never), `auto`,
+`on` (try even without an NVIDIA driver, and warn when falling back).
 """
 
 from __future__ import annotations
@@ -32,8 +26,6 @@ import functools
 import io
 import logging
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 from dfpipeline.config import settings
@@ -63,71 +55,24 @@ def _fell_back(what: str, why: str) -> None:
     log.log(level, "%s on the CPU: the GPU did not work (%s)", what, why)
 
 
-# ---------------------------------------------------------------- MediaPipe
-
-_PROBE = """
-import sys, numpy as np, mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
-task = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
-    base_options=python.BaseOptions(model_asset_path=sys.argv[1], delegate=python.BaseOptions.Delegate.GPU),
-    running_mode=vision.RunningMode.VIDEO, num_hands=2))
-task.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.zeros((256, 256, 3), np.uint8)), 0)
-task.close()
-print("ok")
-"""
-
-
-@functools.cache
-def hand_landmarker_on_gpu(model_path: str) -> bool:
-    """Whether the hand landmarker runs on the GPU here: tried in a child
-    process, where a native abort costs nothing but the answer."""
-    if not wanted():
-        return False
-    try:
-        run = subprocess.run([sys.executable, "-c", _PROBE, model_path],
-                             capture_output=True, text=True, timeout=120, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
-        _fell_back("hand tracking", str(exc))
-        return False
-    if run.returncode == 0 and run.stdout.strip().endswith("ok"):
-        log.info("hand tracking on the GPU")
-        return True
-    _fell_back("hand tracking", (run.stderr.strip().splitlines() or [f"exit {run.returncode}"])[-1][:300])
-    return False
-
-
-def mediapipe_delegate(model_path: str):
-    """The delegate for the hand landmarker: GPU where it runs, else CPU."""
-    from mediapipe.tasks.python import BaseOptions
-
-    return BaseOptions.Delegate.GPU if hand_landmarker_on_gpu(str(model_path)) else BaseOptions.Delegate.CPU
-
-
 # ------------------------------------------------------------------ PyTorch
 
 @functools.cache
 def torch_device() -> str:
-    """"cuda" for the PyTorch models where a GPU is wanted and works, else "cpu".
+    """"cuda" for the PyTorch models; raises where there is no working GPU.
 
-    On the GPU, this process may hold only GPU_MEMORY_FRACTION of its memory:
-    the DGX's GPU serves the AI model and training first, and a model that
-    grew into the rest would take them down. Set once, before the first
+    This process may hold only GPU_MEMORY_FRACTION of the GPU's memory: the
+    DGX's GPU serves the AI model and training first, and a model that grew
+    into the rest would take them down. Set once, before the first
     allocation, which is why it is here and cached.
     """
-    if not wanted():
-        return "cpu"
-    try:
-        import torch
+    import torch
 
-        if not torch.cuda.is_available():
-            _fell_back("the PyTorch models", "torch sees no CUDA device")
-            return "cpu"
-        torch.cuda.set_per_process_memory_fraction(settings.gpu_memory_fraction)
-        torch.backends.cuda.matmul.allow_tf32 = True
-    except Exception as exc:  # noqa: BLE001 - no CUDA build, no driver: the CPU
-        _fell_back("the PyTorch models", str(exc)[:300])
-        return "cpu"
+    if not torch.cuda.is_available():
+        raise RuntimeError("hand tracking needs a CUDA GPU, and PyTorch sees none "
+                           f"(torch {torch.__version__}, CUDA build {torch.version.cuda})")
+    torch.cuda.set_per_process_memory_fraction(settings.gpu_memory_fraction)
+    torch.backends.cuda.matmul.allow_tf32 = True
     log.info("PyTorch models on the GPU, within %.0f%% of its memory", 100 * settings.gpu_memory_fraction)
     return "cuda"
 

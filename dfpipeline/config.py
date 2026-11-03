@@ -103,10 +103,9 @@ class Settings(BaseSettings):
     # A one-frame episode cannot be trained on and breaks LeRobot's statistics.
     export_min_episode_frames: int = 30
 
-    # The GPU (dfpipeline/gpu.py): "off" (the default) never tries — on the
-    # DGX the GPU belongs to the models and training; "auto" uses it where it
-    # works; "on" tries and warns when it falls back. deploy.sh gives the
-    # container the GPU only for "on" or "auto".
+    # NVENC video encoding (dfpipeline/gpu.py): "off" (the default) never
+    # tries; "auto" uses it where it works; "on" tries and warns when it falls
+    # back. Hand tracking is on the GPU whatever this says: it has no CPU path.
     pipeline_gpu: str = "off"
     # The share of the GPU's memory one worker process's PyTorch models may
     # hold (gpu.torch_device). Hand tracking with models runs one clip at a
@@ -114,18 +113,16 @@ class Settings(BaseSettings):
     gpu_memory_fraction: float = 0.25
 
     # --- Robot retargeting (dfpipeline/retarget)
-    # Where hand_landmarker.task, efficientdet_lite0.tflite and so101/ live.
+    # Where efficientdet_lite0.tflite, so101/, moge/ and wilor/ live.
     retarget_models_dir: str = "./models"
     # Stamped on every result. Must match the app server's.
     retarget_pipeline_version: str = "hand2robot-1.0"
 
-    # How the hand is seen (docs/HAND2ROBOT_2.md). The defaults are the
-    # pipeline as it was: MediaPipe and no depth model, all on the CPU.
-    # "wilor": WiLoR's 3D hand (hand_wilor.py) — a GPU model.
-    retarget_hand_model: str = "mediapipe"
-    # "moge-2-vits" | "moge-2-vitb" | "moge-2-vitl": real distances from a
-    # depth model on a few frames (scene.py) — a GPU model. "off": guessed.
-    retarget_depth_model: str = "off"
+    # How the hand is seen (docs/HAND2ROBOT_2.md): WiLoR's 3D hand
+    # (hand_wilor.py) and real distances from a depth model on a few frames
+    # (scene.py), both on the GPU. The depth model: "moge-2-vits" |
+    # "moge-2-vitb" | "moge-2-vitl".
+    retarget_depth_model: str = "moge-2-vitb"
     # Frames of each clip the depth model looks at, and its detail (0-9:
     # MoGe's resolution_level; lower is faster).
     retarget_depth_frames: int = 12
