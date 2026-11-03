@@ -419,8 +419,10 @@ def store_bundle(hand_dir: Path, path: str) -> None:
         for item in sorted(hand_dir.rglob("*")):
             # The tracked view is stored separately so a player can stream it;
             # inside the archive too would be the same video twice. A two-hand
-            # clip's hands are in their own folders, kept as they are.
-            if item.is_file() and item.suffix != ".mp4":
+            # clip's hands are in their own folders, kept as they are. The
+            # hand's drawn surface (mesh.npz, ~7 MB a hand) is for research
+            # videos only: nothing downstream reads it, and storage is capped.
+            if item.is_file() and item.suffix != ".mp4" and item.name != "mesh.npz":
                 zf.write(item, item.relative_to(hand_dir).as_posix())
     with archive.open("rb") as fh:
         get_storage().put(path, fh)
