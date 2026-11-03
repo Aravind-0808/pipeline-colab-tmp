@@ -37,6 +37,11 @@ class HandDetection:
     keypoints_2d: np.ndarray | None = None  # (21, 2) in pixel coordinates
     landmarks_3d_norm: np.ndarray | None = None  # (21, 3) normalized hand coordinates
     landmarks_world: np.ndarray | None = None  # (21, 3) metric, origin at hand center
+    # WiLoR's MANO hand surface, to be drawn (research/visualize.py), not
+    # measured with: its 778 vertices in pixels, as WiLoR's own camera
+    # projects them, and in metres around the wrist (camera axes).
+    mesh_uv: np.ndarray | None = None  # (778, 2) float32
+    mesh_xyz: np.ndarray | None = None  # (778, 3) float16
 
 
 class SingleHandTracker:

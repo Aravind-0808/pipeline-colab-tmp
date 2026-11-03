@@ -91,3 +91,42 @@ def test_the_bundle_says_how_its_distances_were_made():
     assert got["lens_source"] == "phone" and got["up_known"] is True
     assert got["depth_model"] == "moge-2-vitb" and got["hand_scale"] == 1.1
     assert got["hand_model"] == "wilor"
+
+
+def _sphere(n=12):
+    """A small closed mesh: vertices (V, 3) and triangles (F, 3)."""
+    th, ph = np.meshgrid(np.linspace(0, np.pi, n), np.linspace(0, 2 * np.pi, 2 * n, endpoint=False), indexing="ij")
+    v = 0.05 * np.stack([np.sin(th) * np.cos(ph), np.sin(th) * np.sin(ph), np.cos(th)], -1).reshape(-1, 3)
+    idx = np.arange(n * 2 * n).reshape(n, 2 * n)
+    f = [tri for i in range(n - 1) for j in range(2 * n) for tri in (
+        [idx[i, j], idx[i + 1, j], idx[i + 1, (j + 1) % (2 * n)]],
+        [idx[i, j], idx[i + 1, (j + 1) % (2 * n)], idx[i, (j + 1) % (2 * n)]])]
+    return v, np.asarray(f)
+
+
+def test_wilors_mesh_lands_where_its_own_joints_do():
+    """Projected the way WiLoR projects its 2D joints: its focal length, the
+    image centre, its translation."""
+    verts, _ = _sphere()
+    t, f = np.array([0.02, -0.01, 30.0]), 25000.0
+    preds = {"pred_vertices": verts[None], "pred_cam_t_full": t[None], "scaled_focal_length": f}
+    wrist = verts[0]
+    uv, xyz = hand_wilor.mesh_of(preds, wrist, 1280, 720)
+    expected = f * (verts[:, :2] + t[:2]) / (verts[:, 2:] + t[2]) + [640, 360]
+    np.testing.assert_allclose(uv, expected, rtol=1e-5)
+    np.testing.assert_allclose(xyz.astype(float), verts - wrist, atol=1e-3)
+    assert hand_wilor.mesh_of({}, wrist, 1280, 720) is None   # older output: no mesh, still a hand
+
+
+def test_a_hand_keeps_its_mesh_and_saves_it_beside_its_trajectory(tmp_path, monkeypatch):
+    verts, faces = _sphere()
+    found = _wilor_hand()
+    found["wilor_preds"].update(pred_vertices=verts[None], pred_cam_t_full=np.array([[0, 0, 30.0]]),
+                                scaled_focal_length=25000.0)
+    d = hand_wilor.to_detection(found, 1280, 720)
+    assert d.mesh_uv.shape == (len(verts), 2) and d.mesh_xyz.shape == (len(verts), 3)
+    monkeypatch.setattr(hand_wilor, "faces", lambda: faces)
+    hand_wilor.save_meshes(tmp_path / "left", {3: d, 7: d})
+    saved = np.load(tmp_path / "left" / "mesh.npz")
+    assert list(saved["frames"]) == [3, 7] and saved["uv"].shape == (2, len(verts), 2)
+    assert saved["faces"].shape == faces.shape

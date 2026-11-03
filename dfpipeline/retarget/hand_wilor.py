@@ -57,6 +57,50 @@ def _pipeline():
                                              wilor_pretrained_dir=str(weights))
 
 
+def mesh_of(preds: dict, wrist: np.ndarray, width: int, height: int) -> tuple[np.ndarray, np.ndarray] | None:
+    """WiLoR's hand surface for drawing: its vertices in pixels, projected the
+    way WiLoR projects its own 2D joints (its focal length, the image centre,
+    its translation), and in metres around the wrist. None when not given."""
+    try:
+        verts = np.asarray(preds["pred_vertices"], dtype=np.float64).reshape(-1, 3)
+        t = np.asarray(preds["pred_cam_t_full"], dtype=np.float64).reshape(3)
+        f = float(np.asarray(preds["scaled_focal_length"]).reshape(-1)[0])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    cam = verts + t
+    if verts.shape[0] < 3 or not np.isfinite(cam).all() or (cam[:, 2] <= 1e-6).any():
+        return None
+    uv = f * cam[:, :2] / cam[:, 2:3] + [width / 2.0, height / 2.0]
+    return uv.astype(np.float32), (verts - wrist).astype(np.float16)
+
+
+@functools.cache
+def faces() -> np.ndarray:
+    """MANO's triangles (1538, 3), the same for every hand: the order of the
+    vertices `mesh_of` gives."""
+    mano = _pipeline().wilor_model.mano
+    f = getattr(mano, "faces", None)
+    if f is None:
+        f = mano.faces_tensor.cpu().numpy()
+    return np.asarray(f, dtype=np.int32).reshape(-1, 3)
+
+
+def save_meshes(folder: Path, meshes: dict[int, HandDetection]) -> None:
+    """One hand's surface, frame by frame, beside its trajectory (mesh.npz):
+    for the videos only — nothing downstream reads it."""
+    frames = sorted(i for i, d in meshes.items() if d.mesh_uv is not None)
+    if not frames:
+        return
+    folder.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        folder / "mesh.npz",
+        frames=np.asarray(frames, dtype=np.int32),
+        uv=np.stack([meshes[i].mesh_uv for i in frames]),
+        xyz=np.stack([meshes[i].mesh_xyz for i in frames]),
+        faces=faces(),
+    )
+
+
 def to_detection(found: dict, width: int, height: int) -> HandDetection | None:
     """One of WiLoR-mini's hands as a HandDetection, or None if incomplete."""
     preds = found.get("wilor_preds") or {}
@@ -68,6 +112,7 @@ def to_detection(found: dict, width: int, height: int) -> HandDetection | None:
     if not (np.isfinite(kp2).all() and np.isfinite(kp3).all()):
         return None
     x1, y1, x2, y2 = (float(v) for v in found.get("hand_bbox") or kp2_box(kp2))
+    mesh = mesh_of(preds, kp3[0], width, height)
     return HandDetection(
         hand_side="right" if float(found.get("is_right", 1.0)) >= 0.5 else "left",
         bbox=[max(0.0, x1), max(0.0, y1), min(float(width), x2), min(float(height), y2)],
@@ -77,6 +122,8 @@ def to_detection(found: dict, width: int, height: int) -> HandDetection | None:
         landmarks_3d_norm=None,
         # Root-relative, metres: PnP needs the shape, not where it is.
         landmarks_world=kp3 - kp3[0],
+        mesh_uv=mesh[0] if mesh else None,
+        mesh_xyz=mesh[1] if mesh else None,
     )
 
 

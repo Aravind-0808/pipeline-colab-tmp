@@ -27,7 +27,7 @@ from dfpipeline.retarget.camera_reconstruction import CameraPoseEstimator
 from dfpipeline.retarget.export import TrajectoryExporter
 from dfpipeline.retarget.hand_detection import SingleHandTracker, TwoHandTracker
 from dfpipeline.retarget.hand_reconstruction import HandReconstructor
-from dfpipeline.retarget.hand_wilor import make_detector
+from dfpipeline.retarget.hand_wilor import make_detector, save_meshes
 from dfpipeline.retarget.retarget_so101 import (
     ARM_SIDES,
     SO101Retargeter,
@@ -276,6 +276,7 @@ def run_hand_stage(
     tracker = SingleHandTracker(frame_diag_px=float(np.hypot(width, height)))
     hand_kp: dict[int, np.ndarray] = {}  # the tracked hand's 2D points, for its holds (grasp.py)
     seen: dict[int, list] = {}  # frame -> [(2D points, reconstruction)], for the depth model (scene.py)
+    tracked: dict[int, Any] = {}  # frame -> the tracked hand's detection, for its drawn mesh
     hands_detected_count = 0
     frames_since_valid = 0
 
@@ -291,6 +292,7 @@ def run_hand_stage(
         recon = None
         best_det = tracker.select(detections)
         if best_det is not None:
+            tracked[frame_idx] = best_det
             hand_kp[frame_idx] = best_det.keypoints_2d
             pinch_px[frame_idx] = 0.5 * (best_det.keypoints_2d[4] + best_det.keypoints_2d[8])
             recon = hand_reconstructor.reconstruct_from_detection(
@@ -408,6 +410,7 @@ def run_hand_stage(
     }
     json_path, npz_path = exporter.export(fused_frames, metadata=metadata)
     _write_holds(out_dir, hand_kp, objects.candidates if objects else [], fused_frames, total_frames, fps, K)
+    _save_meshes(out_dir, tracked)
 
     # What the robot stage needs and the human-readable exports do not carry:
     # the table plane, the distance to it, and the object as the retargeter
@@ -489,6 +492,15 @@ def _write_holds(folder, keypoints, candidates, frames, total_frames, fps, K, ho
                  [(a, b) for a, b in grasp._runs(holds.held)], width and round(width, 3))
     except Exception as exc:  # noqa: BLE001 - the gripper falls back to the fingertips
         log.warning("Holds not found: %s", exc)
+
+
+def _save_meshes(folder: Path, tracked: dict[int, Any]) -> None:
+    """The hand's drawn surface (hand_wilor.save_meshes): for the videos only,
+    so a failure to write it is logged, never the clip's."""
+    try:
+        save_meshes(folder, tracked)
+    except Exception as exc:  # noqa: BLE001 - a picture, not a measurement
+        log.warning("hand mesh not saved: %s", exc)
 
 
 def _measure_scene(video: Path, lens, up, total_frames: int, seen: dict[int, list],
@@ -646,6 +658,7 @@ def _run_two_hands(input_path, out_dir, fps, total_frames, size, lens, progress_
     tracker = TwoHandTracker(frame_diag_px=float(np.hypot(width, height)))
     rebuilders = [HandReconstructor(), HandReconstructor()]
     hand_kp: list[dict[int, np.ndarray]] = [{}, {}]  # each hand's 2D points, for its holds
+    tracked: list[dict[int, Any]] = [{}, {}]  # each hand's detections, for its drawn mesh
     recons: list[list] = [[], []]
     since_valid = [0, 0]
     hand_bboxes: dict[int, list[list[float]]] = {}
@@ -658,6 +671,7 @@ def _run_two_hands(input_path, out_dir, fps, total_frames, size, lens, progress_
         for k, det in enumerate(tracker.select(found)):
             recon = None
             if det is not None:
+                tracked[k][frame_idx] = det
                 hand_kp[k][frame_idx] = det.keypoints_2d
                 pinches.append(0.5 * (det.keypoints_2d[4] + det.keypoints_2d[8]))
                 recon = rebuilders[k].reconstruct_from_detection(
@@ -767,6 +781,7 @@ def _run_two_hands(input_path, out_dir, fps, total_frames, size, lens, progress_
         TrajectoryExporter(output_dir=out_dir / side).export(frames, metadata=metadata)
         _write_holds(out_dir / side, hand_kp[sides.index(side)], objects.candidates if objects else [],
                      frames, total_frames, fps, K, holds.get(side))
+        _save_meshes(out_dir / side, tracked[sides.index(side)])
 
     _write_hand_stage(out_dir, fps, total_frames, size, camera_result, plane_distance, object_info,
                       hands=list(ARM_SIDES), perception=_perception(lens, up, scene_found))

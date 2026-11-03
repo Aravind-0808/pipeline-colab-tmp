@@ -2,8 +2,10 @@
 
 For one clip run through the pipeline (research/hand2robot2_colab.ipynb):
 
-  hand_overlay.mp4   the clip with the tracked hand drawn on it, and how its
-                     distances were made (lens, table, hand scale)
+  hand_overlay.mp4   the clip with the tracked hand drawn on it — WiLoR's 3D
+                     hand mesh where the run saved it (hand/<side>/mesh.npz),
+                     else the 21-point skeleton — and how its distances were
+                     made (lens, table, hand scale)
   robot_sim.mp4      the SO-101 in MuJoCo replaying the trajectory, on the
                      robot's own clock; the hand's target as a red dot
   two_view.mp4       both, side by side, on the video's clock
@@ -30,6 +32,9 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 BONES = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10), (10, 11),
          (11, 12), (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (0, 17), (17, 18), (18, 19), (19, 20)]
 COLOURS = {"left": (255, 140, 0), "right": (0, 200, 255), "": (0, 230, 120)}   # BGR
+#: The mesh's colour, a light lavender as in WiLoR's own demo, tinted per hand.
+MESH_COLOURS = {"left": (235, 175, 150), "right": (215, 160, 225), "": (225, 170, 185)}   # BGR
+MESH_OPACITY = 0.8
 SIM_SIZE = (480, 480)       # width, height of each robot view
 ARM_JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 
@@ -45,6 +50,19 @@ def _hands(hand_dir: Path) -> dict[str, dict[int, np.ndarray]]:
     for side, folder in folders:
         data = np.load(folder / "trajectory.npz")
         out[side] = {int(f): np.asarray(j, float) for f, j in zip(data["frames"], data["joints_camera"])}
+    return out
+
+
+def _meshes(hand_dir: Path) -> dict[str, dict]:
+    """side -> {"faces", frame -> (uv (778, 2), xyz (778, 3))}: WiLoR's hand
+    surface as the run saved it (hand_wilor.save_meshes); absent, {}."""
+    out = {}
+    for side, folder in (("left", hand_dir / "left"), ("right", hand_dir / "right"), ("", hand_dir)):
+        f = folder / "mesh.npz"
+        if f.is_file():
+            data = np.load(f)
+            frames = {int(i): (uv, xyz) for i, uv, xyz in zip(data["frames"], data["uv"], data["xyz"])}
+            out[side] = {"faces": data["faces"], "frames": frames}
     return out
 
 
@@ -80,6 +98,29 @@ def _banner(img, lines: list[str]) -> None:
         cv2.putText(img, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(img, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
         y += 22
+
+
+def _draw_mesh(img, uv: np.ndarray, xyz: np.ndarray, faces: np.ndarray, colour) -> None:
+    """WiLoR's hand surface on the frame, shaded and see-through: each triangle
+    lit by how squarely it faces the camera, drawn far to near (the painter's
+    order — at a hand's size and distance, the triangles do not cross)."""
+    import cv2
+
+    p = xyz.astype(np.float64)[faces]                         # (F, 3 corners, 3)
+    normal = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+    facing = np.abs(normal[:, 2]) / np.maximum(np.linalg.norm(normal, axis=1), 1e-12)
+    shade = 0.35 + 0.65 * facing
+    order = np.argsort(-p[:, :, 2].mean(axis=1))              # far first
+    tri = np.round(uv[faces] * 4).astype(np.int32)            # 2 bits of sub-pixel
+    base = np.asarray(colour, dtype=np.float64)
+    layer = img.copy()
+    mask = np.zeros(img.shape[:2], np.uint8)
+    for k in order:
+        c = tuple(int(v) for v in base * shade[k])
+        cv2.fillConvexPoly(layer, tri[k], c, cv2.LINE_8, 2)   # no anti-aliasing: it leaves seams
+        cv2.fillConvexPoly(mask, tri[k], 255, cv2.LINE_8, 2)
+    blend = cv2.addWeighted(layer, MESH_OPACITY, img, 1.0 - MESH_OPACITY, 0)
+    np.copyto(img, blend, where=mask[:, :, None] > 0)
 
 
 def _draw_hand(img, joints: np.ndarray, K: np.ndarray, colour) -> None:
@@ -194,6 +235,7 @@ def render(video: Path, run_dir: Path, title: str, so101_dir: Path | None = None
     bundle = json.loads((run_dir / "hand" / "hand_stage.json").read_text())
     p = bundle.get("perception") or {}
     hands = _hands(run_dir / "hand")
+    meshes = _meshes(run_dir / "hand")
     robot = _robot(run_dir / "robot")
     header, samples = robot if robot else ({}, [])
     sides = header.get("arms") or []
@@ -254,9 +296,13 @@ def render(video: Path, run_dir: Path, title: str, so101_dir: Path | None = None
         if not ok:
             break
         K = _K(bundle, img.shape[1], img.shape[0])
-        for side, frames in hands.items():
-            if idx in frames:
-                _draw_hand(img, frames[idx], K, COLOURS.get(side, COLOURS[""]))
+        for side in sorted(set(hands) | set(meshes)):
+            mesh = meshes.get(side, {})
+            if idx in mesh.get("frames", {}):
+                uv, xyz = mesh["frames"][idx]
+                _draw_mesh(img, uv, xyz, mesh["faces"], MESH_COLOURS.get(side, MESH_COLOURS[""]))
+            elif idx in hands.get(side, {}):
+                _draw_hand(img, hands[side][idx], K, COLOURS.get(side, COLOURS[""]))
         _banner(img, lines)
         if hand_w is None:
             hand_w = _Writer(out_dir / "hand_overlay.mp4", fps, img.shape[1], img.shape[0])
