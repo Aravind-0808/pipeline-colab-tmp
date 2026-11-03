@@ -1,0 +1,21 @@
+# The pipeline server's NVIDIA GPU, given to the workers. Added by ./deploy.sh
+# on its own when the server has one (an NVIDIA driver and Docker's NVIDIA
+# runtime); a server without stays on the CPU with docker-compose.yaml alone.
+#
+# What uses it is dfpipeline/gpu.py: hand tracking (MediaPipe on OpenGL, hence
+# "graphics") and the datasets' video encoding (NVENC, hence "video"). Each is
+# tried before it is used and falls back to the CPU, so a driver that does not
+# offer one of them costs nothing but that speed.
+
+services:
+  celery-compute:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics,video
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

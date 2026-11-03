@@ -1,0 +1,17 @@
+# Reinstalled inside the image, and platform-specific besides.
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+# Secrets arrive as environment at run time, never in the image.
+.env
+.env.*
+!.env.example
+# Work in progress on a development machine.
+_staging/
+_datasets/
+# Downloaded fresh at build time.
+models/*.task
+models/*.tflite
+tests/

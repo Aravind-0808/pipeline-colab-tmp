@@ -1,0 +1,71 @@
+# The DataForge pipeline, on the pipeline server. Heavy work, and no database.
+#
+#   celery-compute  the pipeline's workers, only during PIPELINE_HOURS (the
+#                   night): queues check, track and build, each with its own
+#                   limit of tasks at once. Outside the hours they are stopped
+#                   and work waits in the app's queue.
+#
+# Work arrives from the app server's Redis over the private network and every result
+# goes back the same way; the app server writes it. Clips are read from — and
+# tracks and datasets written to — the app server's MinIO, with this machine's
+# own access key, so it needs to reach the app server's Redis (6379) and MinIO
+# (its MINIO_PORT, 19000 by default). Hugging Face only when a dataset is published.
+#
+# Built here, on the pipeline server, from this folder — so the image is always
+# for this machine's own architecture and no registry is needed:
+#
+#   ./deploy.sh
+#
+# Deploy this BEFORE the app server when both change: see CONTRACT.md.
+
+x-pipeline-env: &pipeline-env
+  APP_ENV: production
+  EXPORT_DATA_DIR: /app/_datasets
+  REDIS_URL: ${REDIS_URL:?set REDIS_URL to the app server's Redis, e.g. redis://:<password>@10.0.0.1:6379/0}
+  NODE_NAME: ${NODE_NAME:-pipeline}
+  # The caps below, so the workers know (and log) the share they were given.
+  PIPELINE_MEM_LIMIT: ${PIPELINE_MEM_LIMIT:-16g}
+  PIPELINE_CPUS: ${PIPELINE_CPUS:-8}
+
+x-pipeline: &pipeline
+  build:
+    context: .
+    # The hand-tracking models (Dockerfile; docs/HAND2ROBOT_2.md), from the
+    # env file deploy.sh reads: none, and the CPU build of PyTorch, by default.
+    args:
+      PERCEPTION: ${PERCEPTION:-}
+      TORCH_INDEX: ${TORCH_INDEX:-https://download.pytorch.org/whl/cpu}
+  image: dataforge-pipeline:local
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  env_file:
+    - path: .env
+      required: false
+    - path: .env.production
+      required: false
+
+services:
+  celery-compute:
+    <<: *pipeline
+    container_name: dataforge-pipeline
+    environment:
+      <<: *pipeline-env
+      # Works only inside PIPELINE_HOURS (default 22:00-09:00 India time, PIPELINE_TZ):
+      # one worker per kind of work, each limited — CHECK_CONCURRENCY,
+      # TRACK_CONCURRENCY, BUILD_CONCURRENCY. See dfpipeline/scheduler.py.
+      ROLE: scheduled
+    # Long enough for running work to finish (STOP_GRACE_SEC) on a redeploy.
+    stop_grace_period: 11m
+    # A fixed share of the machine: the DGX also serves the models and runs
+    # training. Past its memory only this container is stopped (and restarted),
+    # never the models; with swap off, it cannot slow the machine down either.
+    mem_limit: ${PIPELINE_MEM_LIMIT:-16g}
+    memswap_limit: ${PIPELINE_MEM_LIMIT:-16g}
+    cpus: ${PIPELINE_CPUS:-8}
+    volumes:
+      - datasets:/app/_datasets
+
+volumes:
+  # Datasets mid-build (they are kept in MinIO once built).
+  datasets:
