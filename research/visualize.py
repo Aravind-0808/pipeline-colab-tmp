@@ -281,11 +281,14 @@ def render(video: Path, run_dir: Path, title: str, so101_dir: Path | None = None
     return written
 
 
-def compare(top: Path, bottom: Path, dest: Path, height: int = 360) -> Path:
-    """Two two-view videos stacked: one config above another, frame by frame."""
+def compare(top: Path, bottom: Path, dest: Path, height: int = 360) -> Path | None:
+    """Two two-view videos stacked: one config above another, frame by frame.
+    None when either could not be read (nothing is written)."""
     import cv2
 
     a, b = cv2.VideoCapture(str(top)), cv2.VideoCapture(str(bottom))
+    if not (a.isOpened() and b.isOpened()):
+        return None
     fps = a.get(cv2.CAP_PROP_FPS) or 30.0
     writer = None
     while True:
@@ -303,6 +306,7 @@ def compare(top: Path, bottom: Path, dest: Path, height: int = 360) -> Path:
         writer.write(frame)
     a.release()
     b.release()
-    if writer:
-        writer.close()
+    if writer is None:
+        return None
+    writer.close()
     return dest
