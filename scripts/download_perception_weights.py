@@ -37,8 +37,10 @@ def main() -> None:
         print("depth model:", path)
     if "wilor" in args.parts:
         # WiLoR-mini reads <dir>/pretrained_models/{wilor_final.ckpt, detector.pt, MANO_RIGHT.pkl, ...}.
+        # Not wilor_vit.onnx: an ONNX copy of the same model (1.26 GB) that
+        # nothing here loads — the PyTorch checkpoint is what runs.
         path = snapshot_download("warmshao/WiLoR-mini", allow_patterns=["pretrained_models/*"],
-                                 local_dir=root / "wilor")
+                                 ignore_patterns=["*.onnx"], local_dir=root / "wilor")
         print("hand model:", path)
 
 
